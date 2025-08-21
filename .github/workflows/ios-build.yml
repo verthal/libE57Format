@@ -1,3 +1,5 @@
+name: Build iOS XCFrameworks (Xerces + libE57Format)
+
 jobs:
   xerces-autotools-ios:
     runs-on: macos-14
