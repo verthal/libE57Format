@@ -17,8 +17,7 @@ jobs:
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
       - name: Get ios-cmake toolchain
-        run: |
-          git clone https://github.com/leetal/ios-cmake.git "$GITHUB_WORKSPACE/ios-cmake"
+        run: git clone https://github.com/leetal/ios-cmake.git "$GITHUB_WORKSPACE/ios-cmake"
 
       - name: Build Xerces & libE57Format (XCFrameworks)
         shell: bash
@@ -34,13 +33,13 @@ jobs:
           git checkout xerces-3.2.2
           cd ..
 
-          # ===== Wrapper schreiben: baut NUR xerces-c/src und setzt Version =====
+          # ===== Wrapper schreiben: NUR src/ bauen, Version & Build-Includes setzen =====
           mkdir wrapper
           cat > wrapper/CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.20)
           project(xerces_ios VERSION 3.2.2 LANGUAGES C CXX)
 
-          # Version für src/CMakeLists, sonst scheitert write_basic_package_version_file()
+          # Version für src/CMakeLists (benötigt von write_basic_package_version_file)
           set(XERCES_VERSION       "${PROJECT_VERSION}" CACHE STRING "" FORCE)
           set(XERCES_VERSION_MAJOR 3                    CACHE STRING "" FORCE)
           set(XERCES_VERSION_MINOR 2                    CACHE STRING "" FORCE)
@@ -50,11 +49,24 @@ jobs:
           set(BUILD_SHARED_LIBS OFF)
           set(CMAKE_SKIP_INSTALL_RULES ON CACHE BOOL "" FORCE)
 
-          # Optionale Pakete hart deaktivieren (wir wollen nur die Kernlib)
+          # Optionale Dependencies hart deaktivieren
           set(CMAKE_DISABLE_FIND_PACKAGE_ICU  ON CACHE BOOL "" FORCE)
           set(CMAKE_DISABLE_FIND_PACKAGE_CURL ON CACHE BOOL "" FORCE)
 
+          # Nur die Library einbinden
           add_subdirectory("${CMAKE_SOURCE_DIR}/../xerces-c/src" "${CMAKE_BINARY_DIR}/xerces")
+
+          # >>> WICHTIG: generierte Header liegen im Build-Tree unter .../xerces/src
+          # Globaler Include-Pfad, damit 'xercesc/util/Xerces_autoconf_config.hpp' gefunden wird.
+          include_directories(BEFORE "${CMAKE_BINARY_DIR}/xerces/src")
+
+          # Zusätzlich direkt am Target (falls Directory-Property überschrieben wird):
+          if(TARGET xerces-c)
+            target_include_directories(xerces-c PUBLIC "${CMAKE_BINARY_DIR}/xerces/src")
+          endif()
+
+          # Als letzte Sicherung: füge den Pfad auch als Compiler-Option hinzu
+          add_compile_options(-I"${CMAKE_BINARY_DIR}/xerces/src")
           EOF
 
           # ===== Xerces bauen: Device =====
@@ -104,18 +116,4 @@ jobs:
 
           # tatsächliche lib-Namen ermitteln
           LIB_OS=$(ls e57_os/lib*.a | head -n1)
-          LIB_SIM=$(ls e57_sim/lib*.a | head -n1)
-
-          # ===== libE57Format XCFramework =====
-          xcodebuild -create-xcframework \
-            -library "$LIB_OS"  -headers libE57Format/src \
-            -library "$LIB_SIM" -headers libE57Format/src \
-            -output libE57Format.xcframework
-
-      - name: Upload XCFramework artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-xcframeworks
-          path: |
-            _build_ios/XercesC.xcframework
-            _build_ios/libE57Format.xcframework
+          LIB_SIM=$(ls e57_sim/li
