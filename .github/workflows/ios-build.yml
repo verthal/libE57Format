@@ -27,7 +27,7 @@ jobs:
 
           # === Xerces ===
           git clone https://github.com/apache/xerces-c.git
-          (cd xerces-c && git checkout Xerces-C_3_2_2)
+          (cd xerces-c && git checkout xerces-3.2.2)
 
           mkdir wrapper
           cat > wrapper/CMakeLists.txt <<'EOF'
