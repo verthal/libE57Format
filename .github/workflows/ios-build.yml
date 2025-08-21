@@ -1,34 +1,40 @@
 name: Build iOS XCFrameworks
 
 on:
-  workflow_dispatch:   # manueller Start per Knopfdruck
-  push:                # optional auch bei Push auf main
+  workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-14   # macOS Runner mit Xcode 15 / iOS 17 SDK
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install CMake & Ninja
-        run: brew install cmake ninja
+        run: |
+          brew update
+          brew install cmake ninja
+          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
 
-      - name: Clone ios-cmake
-        run: git clone https://github.com/leetal/ios-cmake.git
+      - name: Get ios-cmake toolchain
+        run: git clone https://github.com/leetal/ios-cmake.git "$GITHUB_WORKSPACE/ios-cmake"
 
       - name: Build Xerces & E57 XCFrameworks
+        shell: bash
         run: |
-          bash <<'SCRIPT'
           set -euo pipefail
-          WORKDIR=$PWD/_build_ios
-          mkdir -p $WORKDIR
-          cd $WORKDIR
+          IOS_TOOLCHAIN="$GITHUB_WORKSPACE/ios-cmake/ios.toolchain.cmake"
 
-          # === Xerces ===
+          # --- Xerces 3.2.x holen ---
+          mkdir -p _build_ios && cd _build_ios
           git clone https://github.com/apache/xerces-c.git
-          (cd xerces-c && git checkout xerces-3.2.2)
+          cd xerces-c
+          git fetch --tags --force
+          # stabil: 3.2.2 Tag (so heißt er im Repo: 'xerces-3.2.2')
+          git checkout xerces-3.2.2
+          cd ..
 
+          # --- Wrapper, der NUR src/ baut ---
           mkdir wrapper
           cat > wrapper/CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.20)
@@ -40,38 +46,45 @@ jobs:
           add_subdirectory("${CMAKE_SOURCE_DIR}/../xerces-c/src" "${CMAKE_BINARY_DIR}/xerces")
           EOF
 
+          # --- Xerces bauen: Device + Simulator ---
           cmake -S wrapper -B build_os -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=../ios-cmake/ios.toolchain.cmake \
-            -DPLATFORM=OS64 -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_TOOLCHAIN_FILE="$IOS_TOOLCHAIN" \
+            -DPLATFORM=OS64 \
+            -DCMAKE_BUILD_TYPE=Release
           cmake --build build_os --parallel
 
           cmake -S wrapper -B build_sim -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=../ios-cmake/ios.toolchain.cmake \
-            -DPLATFORM=SIMULATOR64 -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_TOOLCHAIN_FILE="$IOS_TOOLCHAIN" \
+            -DPLATFORM=SIMULATOR64 \
+            -DCMAKE_BUILD_TYPE=Release
           cmake --build build_sim --parallel
 
+          # XCFramework für Xerces
           xcodebuild -create-xcframework \
             -library build_os/xerces/libxerces-c.a -headers xerces-c/src \
             -library build_sim/xerces/libxerces-c.a -headers xerces-c/src \
             -output XercesC.xcframework
 
-          # === libE57Format ===
+          # --- libE57Format holen ---
           git clone https://github.com/asmaloney/libE57Format.git
 
+          # libE57Format bauen (statisch) gegen die gerade gebaute Xerces-Lib
           cmake -S libE57Format -B e57_os -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=../ios-cmake/ios.toolchain.cmake \
-            -DPLATFORM=OS64 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$IOS_TOOLCHAIN" \
+            -DPLATFORM=OS64 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
-            -DXercesC_INCLUDE_DIRS=$PWD/xerces-c/src \
-            -DXercesC_LIBRARY=$PWD/build_os/xerces/libxerces-c.a
+            -DXercesC_INCLUDE_DIRS="$PWD/xerces-c/src" \
+            -DXercesC_LIBRARY="$PWD/build_os/xerces/libxerces-c.a"
           cmake --build e57_os --parallel
 
           cmake -S libE57Format -B e57_sim -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=../ios-cmake/ios.toolchain.cmake \
-            -DPLATFORM=SIMULATOR64 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$IOS_TOOLCHAIN" \
+            -DPLATFORM=SIMULATOR64 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
-            -DXercesC_INCLUDE_DIRS=$PWD/xerces-c/src \
-            -DXercesC_LIBRARY=$PWD/build_sim/xerces/libxerces-c.a
+            -DXercesC_INCLUDE_DIRS="$PWD/xerces-c/src" \
+            -DXercesC_LIBRARY="$PWD/build_sim/xerces/libxerces-c.a"
           cmake --build e57_sim --parallel
 
           LIB_OS=$(ls e57_os/lib*.a | head -n1)
@@ -81,9 +94,9 @@ jobs:
             -library "$LIB_OS"  -headers libE57Format/src \
             -library "$LIB_SIM" -headers libE57Format/src \
             -output libE57Format.xcframework
-          SCRIPT
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: ios-xcframeworks
           path: |
